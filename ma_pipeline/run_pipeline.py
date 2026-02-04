@@ -328,13 +328,20 @@ class EnhancedFusariumMAPipeline:
                 filtered_vcf = variant_caller.run(samples)
             else:
                 self.logger.info("Skipping variant calling (using existing VCF)")
-                # Find existing VCF
+                # Find existing VCF - prefer combined filtered.vcf.gz (contains both SNPs and INDELs)
                 vcf_dir = Path(self.config['output']['directory']) / 'vcfs'
-                vcf_files = list(vcf_dir.glob('*.filtered.vcf*'))
-                if vcf_files:
-                    filtered_vcf = str(vcf_files[0])
+                combined_vcf = vcf_dir / 'filtered.vcf.gz'
+                if combined_vcf.exists():
+                    filtered_vcf = str(combined_vcf)
+                    self.logger.info(f"Using combined VCF: {filtered_vcf}")
                 else:
-                    raise FileNotFoundError("No filtered VCF file found")
+                    # Fall back to any filtered VCF (legacy support)
+                    vcf_files = list(vcf_dir.glob('*.filtered.vcf.gz'))
+                    if vcf_files:
+                        filtered_vcf = str(vcf_files[0])
+                        self.logger.warning(f"Combined VCF not found, using: {filtered_vcf}")
+                    else:
+                        raise FileNotFoundError("No filtered VCF file found")
             
             # Step 4: Muver Model Preparation
             if resume_from not in ['mutation', 'stats', 'report']:
