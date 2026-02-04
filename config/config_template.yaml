@@ -1,0 +1,112 @@
+# =============================================================================
+# Fusarium graminearum MA Pipeline Configuration
+# Parent vs G25 Mutation Accumulation Analysis
+# =============================================================================
+# 
+# INSTRUCTIONS:
+# 1. Copy this file to your working directory
+# 2. Edit the paths and parameters below
+# 3. Run: python run_pipeline.py -c your_config.yaml
+#
+# =============================================================================
+
+# REFERENCE GENOME
+# Download from Ensembl Fungi or use your own
+reference:
+  fasta: "/path/to/Fusarium_graminearum.RR1.dna.toplevel.fa"
+
+# SAMPLE INFORMATION
+samples:
+  # Directory containing your FASTQ files
+  fastq_dir: "/path/to/your/fastq/files"
+  
+  # Mapping file (Excel or Markdown) - see templates folder
+  # This maps Illumina names (like 20087FL-23-01-01_S142) to meaningful names
+  mapping_file: "/path/to/sample_mapping.xlsx"  # or .md
+
+# ALIGNMENT SETTINGS
+alignment:
+  aligner: "bwa-mem2"
+  min_mapq: 20
+
+# BAM PROCESSING
+bam_processing:
+  mark_duplicates: true
+  remove_duplicates: false
+  bqsr: false  # Set true if you have known variants VCF
+
+# VARIANT CALLING
+variant_calling:
+  caller: "gatk"
+  joint_genotyping: true
+  gatk_options:
+    emit_ref_confidence: "GVCF"
+    min_base_quality: 20
+
+# FILTERING (JGI-style hard filters)
+filtering:
+  min_depth: 20
+  max_depth_multiplier: 3.0  # Max depth = mean × this value
+  snp_filters:
+    QD: 2.0    # Quality by Depth
+    FS: 60.0   # Fisher Strand
+    MQ: 40.0   # Mapping Quality
+  indel_filters:
+    QD: 2.0
+    FS: 200.0
+
+# MUTATION CALLING (MA-specific parameters)
+mutation_calling:
+  # For haploid Fusarium, expect high allele frequency
+  min_allele_frequency: 0.8
+  
+  # Require mutation absent in ancestor
+  require_absent_in_ancestor: true
+  
+  # Statistical thresholds
+  p_value_threshold: 0.01
+  fwer: 0.01  # Family-wise error rate
+  
+  # Strand bias filter (phred-scaled)
+  strand_bias_threshold: 2.0
+
+# STATISTICAL ANALYSIS
+statistics:
+  # IMPORTANT: Set to your actual generation number
+  generations: 25
+  
+  # Callable sites (leave empty to auto-calculate from reference)
+  # callable_sites: 36000000  # ~36 Mb for F. graminearum
+  
+  # Analysis options
+  calculate_rates: true
+  calculate_callable_sites: true
+  spectrum_analysis: true
+  calculate_tstv: true
+  indel_size_analysis: true
+  
+  # Bootstrap for confidence intervals
+  bootstrap_ci: true
+  bootstrap_iterations: 1000
+
+# OUTPUT
+output:
+  directory: "./fusarium_ma_results"
+  
+  # Output formats (all will be generated)
+  formats:
+    - "vcf"         # VCF files for mutations
+    - "tsv"         # Tab-separated tables
+    - "html_report" # Interactive HTML report
+    - "plots"       # Publication-ready figures
+
+# RESOURCES (adjust for your server)
+resources:
+  max_threads: 16
+  max_memory: 64  # GB
+  tmp_dir: "/tmp"
+
+# LOGGING
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "pipeline.log"

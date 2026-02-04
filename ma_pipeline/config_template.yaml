@@ -1,0 +1,226 @@
+# =============================================================================
+# Fusarium graminearum MA Pipeline Configuration
+# Parent vs G25 Mutation Accumulation Analysis
+# Enhanced with Muver Statistical Models
+# =============================================================================
+# 
+# INSTRUCTIONS:
+# 1. Copy this file to your working directory
+# 2. Edit the paths and parameters below
+# 3. Run: python run_pipeline.py -c your_config.yaml
+#
+# =============================================================================
+
+# REFERENCE GENOME
+# Download from Ensembl Fungi or use your own
+reference:
+  fasta: "/path/to/Fusarium_graminearum.RR1.dna.toplevel.fa"
+
+# SAMPLE INFORMATION
+samples:
+  # Directory containing your FASTQ files
+  fastq_dir: "/path/to/your/fastq/files"
+  
+  # Mapping file (Excel or Markdown) - see templates folder
+  # This maps Illumina names (like 20087FL-23-01-01_S142) to meaningful names
+  mapping_file: "/path/to/sample_mapping.xlsx"  # or .md
+
+# ALIGNMENT SETTINGS
+alignment:
+  aligner: "bwa-mem2"
+  min_mapq: 20
+
+# BAM PROCESSING
+bam_processing:
+  mark_duplicates: true
+  remove_duplicates: false
+  bqsr: false  # Set true if you have known variants VCF
+
+# VARIANT CALLING
+variant_calling:
+  caller: "gatk"
+  joint_genotyping: true
+  gatk_options:
+    emit_ref_confidence: "GVCF"
+    min_base_quality: 20
+
+# FILTERING (JGI-style hard filters)
+filtering:
+  min_depth: 20
+  max_depth_multiplier: 3.0  # Max depth = mean × this value
+  snp_filters:
+    QD: 2.0    # Quality by Depth
+    FS: 60.0   # Fisher Strand
+    MQ: 40.0   # Mapping Quality
+  indel_filters:
+    QD: 2.0
+    FS: 200.0
+
+# MUTATION CALLING (MA-specific parameters)
+mutation_calling:
+  # For haploid Fusarium, expect high allele frequency
+  min_allele_frequency: 0.8
+  
+  # Require mutation absent in ancestor
+  require_absent_in_ancestor: true
+  
+  # Statistical thresholds
+  p_value_threshold: 0.01
+  fwer: 0.01  # Family-wise error rate
+  
+  # Strand bias filter (phred-scaled)
+  strand_bias_threshold: 2.0
+
+# =============================================================================
+# MUVER STATISTICAL MODELS (Enhanced Accuracy)
+# These models are integrated from the muver pipeline to improve SNP/INDEL
+# accuracy and reduce bias
+# =============================================================================
+muver_models:
+  # Depth Distribution Filtering
+  # Fits depth to normal distribution and filters abnormal regions
+  depth_distribution:
+    enabled: true
+    p_threshold: 0.0001      # P-value threshold for filtering
+    window_size: 51          # Sliding window size (bp)
+    merge_window: 1000       # Merge adjacent filtered regions within this distance
+  
+  # Strand Bias Distribution (Log-Normal)
+  # Characterizes genome-wide strand bias for improved filtering
+  strand_bias:
+    enabled: true
+    p_threshold: 0.01        # P-value threshold for strand bias filter
+  
+  # Depth Correction for Chromosome Ends
+  # Corrects systematic depth bias near chromosome termini
+  depth_correction:
+    enabled: true
+  
+  # Repeat INDEL Correction
+  # Adjusts for higher error rates in repeat regions using logistic fits
+  repeat_indels:
+    enabled: true
+    occurrence_filter: 10    # Min repeat occurrences for rate estimation
+    # repeat_file: ""        # Optional: path to pre-computed repeat file
+  
+  # Subclonal Variant Detection
+  # Detects variants at subclonal frequencies (mosaic mutations)
+  subclonal_detection:
+    enabled: true
+    frequencies: [0.5, 0.25, 0.125]  # Subclonal frequencies to test
+  
+  # Composite Significance Scoring
+  # Combines binomial and chi-square tests using Euclidean distance
+  composite_significance:
+    enabled: true
+    individual_threshold: 0.1  # Each component p-value must be below this
+
+# =============================================================================
+# STATISTICAL ANALYSIS (Enhanced)
+# =============================================================================
+statistics:
+  # IMPORTANT: Set to your actual generation number
+  generations: 25
+  
+  # Callable sites (leave empty to auto-calculate from reference)
+  # callable_sites: 36000000  # ~36 Mb for F. graminearum
+  
+  # Basic analysis options
+  calculate_rates: true
+  calculate_callable_sites: true
+  spectrum_analysis: true
+  calculate_tstv: true
+  indel_size_analysis: true
+  
+  # Bootstrap for confidence intervals
+  bootstrap_ci: true
+  bootstrap_iterations: 10000
+  
+  # Permutation tests
+  permutation_iterations: 10000
+  
+  # Additional statistical tests
+  additional_tests:
+    kolmogorov_smirnov: true    # Test vs Poisson distribution
+    shapiro_wilk: true          # Normality test
+    permutation_tests: true     # Non-parametric genotype comparison
+    effect_size: true           # Cohen's d, Hedges' g calculations
+    kruskal_wallis: true        # Multi-group comparison
+
+# =============================================================================
+# VISUALIZATION (Comprehensive Plotting)
+# =============================================================================
+visualization:
+  # Individual sample plots
+  individual_plots:
+    enabled: true
+    formats: ["png"]  # Options: png, pdf, svg
+    plots:
+      - mutation_spectrum      # 6-category bar chart
+      - depth_distribution     # Histogram with fitted curve
+      - strand_bias            # Log-ratio distribution
+      - allele_frequency       # AF distribution
+      - chromosome_distribution # Per-chromosome counts
+      - quality_dashboard      # Multi-panel summary
+  
+  # Group plots (ancestor + generations)
+  group_plots:
+    enabled: true
+    plots:
+      - genotype_comparison    # Rate comparison by genotype
+      - spectrum_by_genotype   # Spectrum comparison
+      - accumulation_curve     # Mutations vs generation
+      - ancestor_vs_ma         # Side-by-side comparison
+      - effect_size_forest     # Forest plot of effect sizes
+      - replicate_consistency  # Scatter of replicates
+  
+  # Combined plots (all samples together)
+  combined_plots:
+    enabled: true
+    plots:
+      - rate_heatmap           # Clustered heatmap
+      - spectrum_clustering    # PCA of spectra
+      - sample_similarity      # Correlation matrix
+      - combined_distributions # Overlaid densities
+      - summary_dashboard      # Multi-panel overview
+  
+  # Statistical analysis plots (per test)
+  statistical_plots:
+    enabled: true
+    plots:
+      - depth_fit              # Depth distribution + fit
+      - strand_bias_fit        # Strand bias + fit
+      - poisson_qq             # Q-Q plot vs Poisson
+      - genotype_boxplot       # Boxplot with points
+      - pvalue_distribution    # P-value histogram
+      - effect_size_forest     # Effect sizes with CI
+      - dispersion_analysis    # Variance/mean plot
+      - bootstrap_distribution # Rate CIs comparison
+  
+  # Plot settings
+  dpi: 300
+  figure_style: "seaborn-v0_8-whitegrid"  # Matplotlib style
+  font_size: 12
+
+# OUTPUT
+output:
+  directory: "./fusarium_ma_results"
+  
+  # Output formats (all will be generated)
+  formats:
+    - "vcf"         # VCF files for mutations
+    - "tsv"         # Tab-separated tables
+    - "html_report" # Interactive HTML report
+    - "plots"       # Publication-ready figures
+    - "json"        # Machine-readable statistics
+
+# RESOURCES (adjust for your server)
+resources:
+  max_threads: 16
+  max_memory: 64  # GB
+  tmp_dir: "/tmp"
+
+# LOGGING
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "pipeline.log"
