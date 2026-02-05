@@ -23,6 +23,7 @@ Author: Customized for Muhanad's Fusarium MA Experiment
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -30,6 +31,75 @@ import yaml
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
+
+
+class MutationData:
+    """
+    Simple wrapper class for mutation data loaded from TSV.
+    Provides attribute-style access to dictionary data with automatic type conversion.
+    """
+    # Fields that should be integers
+    INT_FIELDS = {
+        'position', 'ancestor_ref_depth', 'ancestor_alt_depth',
+        'sample_ref_depth', 'sample_alt_depth', 'sample_alt_forward',
+        'sample_alt_reverse', 'repeat_tract_length', 'generation',
+        'total_mutations', 'snp_count', 'indel_count', 'insertion_count',
+        'deletion_count', 'callable_sites'
+    }
+    # Fields that should be floats
+    FLOAT_FIELDS = {
+        'corrected_sample_depth', 'corrected_ancestor_depth', 'quality',
+        'p_value_binomial', 'p_value_chi_square', 'p_value_fisher',
+        'p_value_binomial_forward', 'p_value_binomial_reverse',
+        'composite_score', 'strand_bias', 'strand_bias_pvalue',
+        'repeat_adjustment', 'subclonal_frequency',
+        'rate_per_site_per_gen', 'rate_per_kb_per_gen',
+        'ci_lower', 'ci_upper', 'bootstrap_ci_lower', 'bootstrap_ci_upper',
+        'bayesian_ci_lower', 'bayesian_ci_upper'
+    }
+    # Fields that should be booleans
+    BOOL_FIELDS = {
+        'in_repeat', 'is_subclonal', 'passes_composite_test',
+        'passes_depth_distribution_filter', 'is_significant'
+    }
+    
+    def __init__(self, data: Dict):
+        self._data = {}
+        for key, value in data.items():
+            converted = self._convert_value(key, value)
+            self._data[key] = converted
+            setattr(self, key, converted)
+    
+    def _convert_value(self, key: str, value):
+        """Convert value to appropriate type based on field name."""
+        if value == '' or value is None:
+            if key in self.INT_FIELDS:
+                return 0
+            elif key in self.FLOAT_FIELDS:
+                return 0.0
+            elif key in self.BOOL_FIELDS:
+                return False
+            return value
+        
+        try:
+            if key in self.INT_FIELDS:
+                return int(float(value))  # Handle "25.0" -> 25
+            elif key in self.FLOAT_FIELDS:
+                return float(value)
+            elif key in self.BOOL_FIELDS:
+                return str(value).lower() in ('true', '1', 'yes')
+        except (ValueError, TypeError):
+            pass
+        return value
+    
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return self._data.get(name, '')
+    
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
 
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -178,6 +248,168 @@ class EnhancedFusariumMAPipeline:
                     break
         
         return bam_files
+    
+    def load_saved_mutations(self) -> List:
+        """
+        Load mutations from saved TSV file when resuming pipeline.
+        
+        Returns
+        -------
+        list
+            List of MutationData objects (attribute-accessible)
+        """
+        mutations_file = Path(self.config['output']['directory']) / 'mutations' / 'mutations.tsv'
+        mutations = []
+        
+        if mutations_file.exists():
+            self.logger.info(f"Loading mutations from {mutations_file}")
+            with open(mutations_file, 'r') as f:
+                header = f.readline().strip().split('\t')
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    values = line.split('\t')
+                    # Pad with empty strings if row has fewer columns than header
+                    while len(values) < len(header):
+                        values.append('')
+                    # Create dict from header and values
+                    mutation_dict = dict(zip(header, values))
+                    # Wrap in MutationData for attribute access
+                    mutations.append(MutationData(mutation_dict))
+            self.logger.info(f"Loaded {len(mutations)} mutations")
+        else:
+            self.logger.warning(f"Mutations file not found: {mutations_file}")
+        
+        return mutations
+    
+    def load_saved_stats(self) -> Dict:
+        """
+        Load statistics from saved JSON and TSV files when resuming pipeline.
+        
+        Returns
+        -------
+        dict
+            Statistics dictionary with all data needed for reporting
+        """
+        stats_dir = Path(self.config['output']['directory']) / 'statistics'
+        stats = {}
+        
+        # Load main stats from JSON
+        stats_file = stats_dir / 'summary_statistics.json'
+        if stats_file.exists():
+            self.logger.info(f"Loading statistics from {stats_file}")
+            with open(stats_file, 'r') as f:
+                stats = json.load(f)
+            self.logger.info(f"Loaded statistics with keys: {list(stats.keys())}")
+        else:
+            self.logger.warning(f"Statistics file not found: {stats_file}")
+        
+        # Load mutation spectrum from TSV and aggregate
+        spectrum_file = stats_dir / 'mutation_spectrum.tsv'
+        if spectrum_file.exists():
+            self.logger.info(f"Loading mutation spectrum from {spectrum_file}")
+            overall_spectrum = {
+                'C>A': 0, 'C>G': 0, 'C>T': 0,
+                'T>A': 0, 'T>C': 0, 'T>G': 0,
+                'transitions': 0, 'transversions': 0
+            }
+            with open(spectrum_file, 'r') as f:
+                header = f.readline().strip().split('\t')
+                for line in f:
+                    values = line.strip().split('\t')
+                    row = dict(zip(header, values))
+                    for key in ['C>A', 'C>G', 'C>T', 'T>A', 'T>C', 'T>G']:
+                        if key in row:
+                            overall_spectrum[key] += int(row[key])
+                    if 'transitions' in row:
+                        overall_spectrum['transitions'] += int(row['transitions'])
+                    if 'transversions' in row:
+                        overall_spectrum['transversions'] += int(row['transversions'])
+            
+            # Calculate ts/tv ratio
+            if overall_spectrum['transversions'] > 0:
+                overall_spectrum['ts_tv_ratio'] = overall_spectrum['transitions'] / overall_spectrum['transversions']
+            else:
+                overall_spectrum['ts_tv_ratio'] = 0
+            
+            stats['overall_spectrum'] = overall_spectrum
+            self.logger.info(f"Loaded overall spectrum: {overall_spectrum}")
+        
+        # Load mutation rates from TSV
+        rates_file = stats_dir / 'mutation_rates.tsv'
+        if rates_file.exists():
+            self.logger.info(f"Loading mutation rates from {rates_file}")
+            rates = []
+            with open(rates_file, 'r') as f:
+                header = f.readline().strip().split('\t')
+                for line in f:
+                    values = line.strip().split('\t')
+                    if len(values) >= len(header):
+                        row = dict(zip(header, values))
+                        # Helper to safely convert to int
+                        def to_int(val, default=0):
+                            try:
+                                return int(val) if val else default
+                            except (ValueError, TypeError):
+                                return default
+                        # Helper to safely convert to float
+                        def to_float(val, default=0.0):
+                            try:
+                                return float(val) if val else default
+                            except (ValueError, TypeError):
+                                return default
+                        # Create a rate object with all numeric fields properly converted
+                        rate = MutationData({
+                            'sample_name': row.get('sample_name', ''),
+                            'genotype': row.get('genotype', ''),
+                            'generation': to_int(row.get('generation', 25)),
+                            'total_mutations': to_int(row.get('total_mutations', 0)),
+                            'snp_count': to_int(row.get('snp_count', 0)),
+                            'indel_count': to_int(row.get('indel_count', 0)),
+                            'insertion_count': to_int(row.get('insertion_count', 0)),
+                            'deletion_count': to_int(row.get('deletion_count', 0)),
+                            'callable_sites': to_int(row.get('callable_sites', 0)),
+                            'rate_per_site_per_gen': to_float(row.get('rate_per_site_per_gen', 0)),
+                            'rate_per_kb_per_gen': to_float(row.get('rate_per_kb_per_gen', 0)),
+                            'ci_lower': to_float(row.get('ci_lower', 0)),
+                            'ci_upper': to_float(row.get('ci_upper', 0)),
+                            'bootstrap_ci_lower': to_float(row.get('bootstrap_ci_lower', 0)),
+                            'bootstrap_ci_upper': to_float(row.get('bootstrap_ci_upper', 0)),
+                            'bayesian_ci_lower': to_float(row.get('bayesian_ci_lower', 0)),
+                            'bayesian_ci_upper': to_float(row.get('bayesian_ci_upper', 0))
+                        })
+                        rates.append(rate)
+            stats['rates'] = rates
+            self.logger.info(f"Loaded {len(rates)} mutation rate entries")
+        
+        # Map indel_analysis from JSON to 'indels' key for visualization code
+        if 'indel_analysis' in stats and 'indels' not in stats:
+            stats['indels'] = stats['indel_analysis']
+            self.logger.info(f"Mapped indel_analysis to indels key")
+        
+        # Load indel analysis from TSV if not already in stats
+        indel_file = stats_dir / 'indel_analysis.tsv'
+        if indel_file.exists() and 'indels' not in stats:
+            self.logger.info(f"Loading indel analysis from {indel_file}")
+            with open(indel_file, 'r') as f:
+                header = f.readline().strip().split('\t')
+                values = f.readline().strip().split('\t')
+                if len(values) >= len(header):
+                    indels = dict(zip(header, values))
+                    # Convert numeric fields
+                    for key in ['total_indels', 'insertions', 'deletions']:
+                        if key in indels:
+                            indels[key] = int(indels[key])
+                    for key in ['ins_del_ratio', 'mean_insertion_size', 'mean_deletion_size']:
+                        if key in indels:
+                            try:
+                                indels[key] = float(indels[key])
+                            except ValueError:
+                                indels[key] = 0.0
+                    stats['indels'] = indels
+        
+        return stats
     
     def run_muver_preparation(self, samples: List, ancestor) -> Dict:
         """
@@ -362,13 +594,10 @@ class EnhancedFusariumMAPipeline:
                 mutations = mutation_caller.run(samples, ancestor, filtered_vcf, bam_files)
             else:
                 self.logger.info("Skipping mutation calling")
-                # Load existing mutations
-                mutations_file = Path(self.config['output']['directory']) / 'mutations' / 'mutations.tsv'
-                if mutations_file.exists():
-                    # Would need to parse TSV back to Mutation objects
-                    mutations = []  # Placeholder
-                else:
-                    raise FileNotFoundError("No mutations file found")
+                # Load existing mutations from saved TSV
+                mutations = self.load_saved_mutations()
+                if not mutations:
+                    self.logger.warning("No mutations loaded - report may be incomplete")
             
             # Step 6: Enhanced Statistical Analysis
             if resume_from not in ['report']:
@@ -379,7 +608,10 @@ class EnhancedFusariumMAPipeline:
                 stats = stats_module.run(mutations, samples, ancestor)
             else:
                 self.logger.info("Skipping statistical analysis")
-                stats = {}
+                # Load existing statistics from saved JSON
+                stats = self.load_saved_stats()
+                if not stats:
+                    self.logger.warning("No statistics loaded - report may be incomplete")
             
             # Step 7: Comprehensive Reporting and Visualization
             self.logger.info("=" * 70)

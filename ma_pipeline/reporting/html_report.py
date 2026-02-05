@@ -69,6 +69,67 @@ class EnhancedReporting:
             'statistics': []
         }
     
+    def scan_existing_plots(self) -> Dict[str, any]:
+        """
+        Scan the plots directory for existing plot files.
+        
+        This ensures the HTML report includes all existing plots,
+        even when resuming from a later pipeline step.
+        
+        Returns
+        -------
+        dict
+            Dictionary of plot paths organized by category
+        """
+        self.logger.info("Scanning for existing plot files...")
+        
+        # Scan group plots
+        groups_dir = self.plots_dir / 'groups'
+        if groups_dir.exists():
+            self.plot_paths['groups'] = sorted([
+                str(f) for f in groups_dir.glob('*.png')
+            ])
+            self.logger.info(f"  Found {len(self.plot_paths['groups'])} group plots")
+        
+        # Scan combined plots
+        combined_dir = self.plots_dir / 'combined'
+        if combined_dir.exists():
+            self.plot_paths['combined'] = sorted([
+                str(f) for f in combined_dir.glob('*.png')
+            ])
+            self.logger.info(f"  Found {len(self.plot_paths['combined'])} combined plots")
+        
+        # Scan statistics plots
+        stats_dir = self.plots_dir / 'statistics'
+        if stats_dir.exists():
+            self.plot_paths['statistics'] = sorted([
+                str(f) for f in stats_dir.glob('*.png')
+            ])
+            self.logger.info(f"  Found {len(self.plot_paths['statistics'])} statistics plots")
+        
+        # Scan individual sample plots
+        individual_dir = self.plots_dir / 'individual'
+        if individual_dir.exists():
+            self.plot_paths['individual'] = {}
+            for sample_dir in individual_dir.iterdir():
+                if sample_dir.is_dir():
+                    sample_plots = sorted([
+                        str(f) for f in sample_dir.glob('*.png')
+                    ])
+                    if sample_plots:
+                        self.plot_paths['individual'][sample_dir.name] = sample_plots
+            self.logger.info(f"  Found plots for {len(self.plot_paths['individual'])} individual samples")
+        
+        total_plots = (
+            sum(len(v) for v in self.plot_paths['individual'].values()) +
+            len(self.plot_paths['groups']) +
+            len(self.plot_paths['combined']) +
+            len(self.plot_paths['statistics'])
+        )
+        self.logger.info(f"  Total: {total_plots} plot files found")
+        
+        return self.plot_paths
+    
     def generate_all_plots(self, mutations: List, samples: List, ancestor,
                            rates: List, stats_results: Dict,
                            muver_data: Dict = None) -> Dict[str, List[str]]:
@@ -157,6 +218,9 @@ class EnhancedReporting:
             Path to generated HTML report
         """
         self.logger.info("Generating comprehensive HTML report...")
+        
+        # Scan for existing plots to ensure all are included
+        self.scan_existing_plots()
         
         summary = stats.get('summary', {})
         rates = stats.get('rates', [])
@@ -376,6 +440,86 @@ class EnhancedReporting:
             border-top: none;
             border-radius: 0 0 5px 5px;
         }}
+        /* Modal/Lightbox styles */
+        .plot-container img {{
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }}
+        .plot-container img:hover {{
+            transform: scale(1.02);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }}
+        .modal {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.9);
+            overflow: auto;
+        }}
+        .modal-content {{
+            margin: auto;
+            display: block;
+            max-width: 90%;
+            max-height: 90%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border-radius: 10px;
+            box-shadow: 0 0 30px rgba(255,255,255,0.2);
+        }}
+        .modal-close {{
+            position: fixed;
+            top: 20px;
+            right: 35px;
+            color: #fff;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 1001;
+            transition: color 0.3s ease;
+        }}
+        .modal-close:hover {{
+            color: #bbb;
+        }}
+        .modal-caption {{
+            text-align: center;
+            color: #ccc;
+            padding: 10px;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 1.2em;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+        }}
+        .modal-nav {{
+            position: fixed;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #fff;
+            font-size: 50px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 20px;
+            user-select: none;
+            transition: color 0.3s ease;
+        }}
+        .modal-nav:hover {{
+            color: #bbb;
+        }}
+        .modal-prev {{
+            left: 20px;
+        }}
+        .modal-next {{
+            right: 20px;
+        }}
     </style>
 </head>
 <body>
@@ -539,42 +683,51 @@ class EnhancedReporting:
     def _generate_statistical_tests_section(self, poisson: Dict, genotype_comp: Dict,
                                              additional_tests: Dict) -> str:
         """Generate statistical tests section."""
+        # Helper function to safely format numeric values
+        def safe_format(value, fmt='.4f'):
+            try:
+                return f"{float(value):{fmt}}"
+            except (ValueError, TypeError):
+                return str(value) if value is not None else 'N/A'
+        
         # Poisson test
         poisson_conclusion = poisson.get('conclusion', 'N/A')
-        poisson_class = 'success' if 'uniform' in poisson_conclusion.lower() else 'warning'
+        poisson_class = 'success' if 'uniform' in str(poisson_conclusion).lower() else 'warning'
         
         # Additional tests
         additional_html = ""
         if additional_tests:
-            ks_test = additional_tests.get('ks_test')
-            shapiro_test = additional_tests.get('shapiro_test')
+            # Use correct key names from JSON
+            ks_test = additional_tests.get('kolmogorov_smirnov')
+            shapiro_test = additional_tests.get('shapiro_wilk')
             perm_test = additional_tests.get('permutation_test')
             
-            if ks_test:
+            if ks_test and isinstance(ks_test, dict):
                 additional_html += f"""
                 <tr>
                     <td>Kolmogorov-Smirnov</td>
-                    <td>{getattr(ks_test, 'statistic', 'N/A'):.4f}</td>
-                    <td>{getattr(ks_test, 'p_value', 'N/A'):.4f}</td>
-                    <td>{getattr(ks_test, 'conclusion', 'N/A')}</td>
+                    <td>{safe_format(ks_test.get('statistic'))}</td>
+                    <td>{safe_format(ks_test.get('p_value'))}</td>
+                    <td>{ks_test.get('conclusion', 'N/A')}</td>
                 </tr>
 """
-            if shapiro_test:
+            if shapiro_test and isinstance(shapiro_test, dict):
+                is_normal = str(shapiro_test.get('is_normal', 'False')).lower() in ('true', '1', 'yes')
                 additional_html += f"""
                 <tr>
                     <td>Shapiro-Wilk</td>
-                    <td>{getattr(shapiro_test, 'statistic', 'N/A'):.4f}</td>
-                    <td>{getattr(shapiro_test, 'p_value', 'N/A'):.4f}</td>
-                    <td>{'Normal' if getattr(shapiro_test, 'is_normal', False) else 'Non-normal'}</td>
+                    <td>{safe_format(shapiro_test.get('statistic'))}</td>
+                    <td>{safe_format(shapiro_test.get('p_value'))}</td>
+                    <td>{'Normal' if is_normal else 'Non-normal'}</td>
                 </tr>
 """
-            if perm_test:
+            if perm_test and isinstance(perm_test, dict):
                 additional_html += f"""
                 <tr>
                     <td>Permutation Test</td>
-                    <td>{getattr(perm_test, 'observed_statistic', 'N/A'):.4f}</td>
-                    <td>{getattr(perm_test, 'p_value', 'N/A'):.4f}</td>
-                    <td>n={getattr(perm_test, 'n_permutations', 'N/A')}</td>
+                    <td>{safe_format(perm_test.get('observed_statistic'))}</td>
+                    <td>{safe_format(perm_test.get('p_value'))}</td>
+                    <td>n={perm_test.get('n_permutations', 'N/A')}</td>
                 </tr>
 """
         
@@ -582,12 +735,13 @@ class EnhancedReporting:
         effect_html = ""
         effect_sizes = genotype_comp.get('effect_sizes', [])
         for es in effect_sizes:
-            effect_html += f"""
+            if isinstance(es, dict):
+                effect_html += f"""
             <tr>
-                <td>{es['genotype1']} vs {es['genotype2']}</td>
-                <td>{es['cohens_d']:.3f}</td>
-                <td>[{es['cohens_d_ci_lower']:.3f}, {es['cohens_d_ci_upper']:.3f}]</td>
-                <td>{es['interpretation']}</td>
+                <td>{es.get('genotype1', 'N/A')} vs {es.get('genotype2', 'N/A')}</td>
+                <td>{safe_format(es.get('cohens_d'), '.3f')}</td>
+                <td>[{safe_format(es.get('cohens_d_ci_lower'), '.3f')}, {safe_format(es.get('cohens_d_ci_upper'), '.3f')}]</td>
+                <td>{es.get('interpretation', 'N/A')}</td>
             </tr>
 """
         
@@ -598,9 +752,9 @@ class EnhancedReporting:
         <h3>Poisson Uniformity Test</h3>
         <div class="highlight {poisson_class}">
             <strong>Conclusion:</strong> {poisson_conclusion}<br>
-            <strong>Dispersion Index:</strong> {poisson.get('dispersion_index', 0):.2f} | 
-            <strong>Chi2 Statistic:</strong> {poisson.get('chi2_statistic', 0):.2f} | 
-            <strong>P-value:</strong> {poisson.get('p_value', 1.0):.4f}
+            <strong>Dispersion Index:</strong> {safe_format(poisson.get('dispersion_index', 0), '.2f')} | 
+            <strong>Chi2 Statistic:</strong> {safe_format(poisson.get('chi2_statistic', 0), '.2f')} | 
+            <strong>P-value:</strong> {safe_format(poisson.get('p_value', 1.0), '.4f')}
         </div>
         
         <h3>Additional Statistical Tests</h3>
@@ -608,8 +762,8 @@ class EnhancedReporting:
             <tr><th>Test</th><th>Statistic</th><th>P-value</th><th>Result</th></tr>
             <tr>
                 <td>Poisson Dispersion</td>
-                <td>{poisson.get('chi2_statistic', 0):.4f}</td>
-                <td>{poisson.get('p_value', 1.0):.4f}</td>
+                <td>{safe_format(poisson.get('chi2_statistic', 0), '.4f')}</td>
+                <td>{safe_format(poisson.get('p_value', 1.0), '.4f')}</td>
                 <td>{poisson_conclusion}</td>
             </tr>
             {additional_html}
@@ -623,8 +777,35 @@ class EnhancedReporting:
     </div>
 """
     
+    def _embed_image_as_base64(self, image_path: str) -> str:
+        """Convert image file to base64 data URI for embedding in HTML."""
+        try:
+            path = Path(image_path)
+            if not path.exists():
+                return ""
+            
+            # Determine MIME type
+            suffix = path.suffix.lower()
+            mime_types = {
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+                '.svg': 'image/svg+xml'
+            }
+            mime_type = mime_types.get(suffix, 'image/png')
+            
+            # Read and encode
+            with open(path, 'rb') as f:
+                data = base64.b64encode(f.read()).decode('utf-8')
+            
+            return f"data:{mime_type};base64,{data}"
+        except Exception as e:
+            self.logger.warning(f"Failed to embed image {image_path}: {e}")
+            return ""
+    
     def _generate_plots_section(self) -> str:
-        """Generate plots gallery section."""
+        """Generate plots gallery section with embedded base64 images."""
         html = """
     <div class="section">
         <h2>Visualizations</h2>
@@ -641,8 +822,10 @@ class EnhancedReporting:
         html += '<div class="plot-grid">'
         for path in self.plot_paths.get('groups', []):
             if path and Path(path).exists():
-                rel_path = Path(path).relative_to(self.output_dir.parent) if self.output_dir.parent in Path(path).parents else path
-                html += f'<div class="plot-container"><img src="../{rel_path}" alt="Group Plot"></div>'
+                data_uri = self._embed_image_as_base64(path)
+                if data_uri:
+                    plot_name = Path(path).stem.replace('_', ' ').title()
+                    html += f'<div class="plot-container"><img src="{data_uri}" alt="{plot_name}" title="{plot_name}"></div>'
         html += '</div></div>'
         
         # Combined plots tab
@@ -650,8 +833,10 @@ class EnhancedReporting:
         html += '<div class="plot-grid">'
         for path in self.plot_paths.get('combined', []):
             if path and Path(path).exists():
-                rel_path = Path(path).relative_to(self.output_dir.parent) if self.output_dir.parent in Path(path).parents else path
-                html += f'<div class="plot-container"><img src="../{rel_path}" alt="Combined Plot"></div>'
+                data_uri = self._embed_image_as_base64(path)
+                if data_uri:
+                    plot_name = Path(path).stem.replace('_', ' ').title()
+                    html += f'<div class="plot-container"><img src="{data_uri}" alt="{plot_name}" title="{plot_name}"></div>'
         html += '</div></div>'
         
         # Statistics plots tab
@@ -659,8 +844,10 @@ class EnhancedReporting:
         html += '<div class="plot-grid">'
         for path in self.plot_paths.get('statistics', []):
             if path and Path(path).exists():
-                rel_path = Path(path).relative_to(self.output_dir.parent) if self.output_dir.parent in Path(path).parents else path
-                html += f'<div class="plot-container"><img src="../{rel_path}" alt="Statistics Plot"></div>'
+                data_uri = self._embed_image_as_base64(path)
+                if data_uri:
+                    plot_name = Path(path).stem.replace('_', ' ').title()
+                    html += f'<div class="plot-container"><img src="{data_uri}" alt="{plot_name}" title="{plot_name}"></div>'
         html += '</div></div>'
         
         # Individual sample plots tab
@@ -670,8 +857,10 @@ class EnhancedReporting:
             html += '<div class="content"><div class="plot-grid">'
             for path in paths:
                 if path and Path(path).exists():
-                    rel_path = Path(path).relative_to(self.output_dir.parent) if self.output_dir.parent in Path(path).parents else path
-                    html += f'<div class="plot-container"><img src="../{rel_path}" alt="{sample_name}"></div>'
+                    data_uri = self._embed_image_as_base64(path)
+                    if data_uri:
+                        plot_name = Path(path).stem.replace('_', ' ').title()
+                        html += f'<div class="plot-container"><img src="{data_uri}" alt="{plot_name}" title="{plot_name}"></div>'
             html += '</div></div>'
         html += '</div>'
         
@@ -744,7 +933,17 @@ class EnhancedReporting:
         <p>Integrating muver statistical models for improved accuracy</p>
     </div>
     
+    <!-- Modal/Lightbox for images -->
+    <div id="imageModal" class="modal">
+        <span class="modal-close" onclick="closeModal()">&times;</span>
+        <span class="modal-nav modal-prev" onclick="navigateImage(-1)">&#10094;</span>
+        <span class="modal-nav modal-next" onclick="navigateImage(1)">&#10095;</span>
+        <img class="modal-content" id="modalImage">
+        <div class="modal-caption" id="modalCaption"></div>
+    </div>
+    
     <script>
+    // Tab functionality
     function openTab(evt, tabName) {
         var i, tabcontent, tablinks;
         tabcontent = document.getElementsByClassName("tabcontent");
@@ -759,6 +958,7 @@ class EnhancedReporting:
         evt.currentTarget.className += " active";
     }
     
+    // Collapsible sections
     var coll = document.getElementsByClassName("collapsible");
     for (var i = 0; i < coll.length; i++) {
         coll[i].addEventListener("click", function() {
@@ -771,6 +971,69 @@ class EnhancedReporting:
             }
         });
     }
+    
+    // Modal/Lightbox functionality
+    var modal = document.getElementById("imageModal");
+    var modalImg = document.getElementById("modalImage");
+    var captionText = document.getElementById("modalCaption");
+    var currentImageIndex = 0;
+    var allImages = [];
+    
+    // Collect all plot images and make them clickable
+    document.addEventListener("DOMContentLoaded", function() {
+        var plotContainers = document.querySelectorAll(".plot-container img");
+        allImages = Array.from(plotContainers);
+        
+        allImages.forEach(function(img, index) {
+            img.onclick = function() {
+                openModal(index);
+            };
+        });
+    });
+    
+    function openModal(index) {
+        currentImageIndex = index;
+        modal.style.display = "block";
+        modalImg.src = allImages[index].src;
+        captionText.innerHTML = allImages[index].alt || allImages[index].title || "Plot " + (index + 1);
+        document.body.style.overflow = "hidden";
+    }
+    
+    function closeModal() {
+        modal.style.display = "none";
+        document.body.style.overflow = "auto";
+    }
+    
+    function navigateImage(direction) {
+        currentImageIndex += direction;
+        if (currentImageIndex < 0) {
+            currentImageIndex = allImages.length - 1;
+        } else if (currentImageIndex >= allImages.length) {
+            currentImageIndex = 0;
+        }
+        modalImg.src = allImages[currentImageIndex].src;
+        captionText.innerHTML = allImages[currentImageIndex].alt || allImages[currentImageIndex].title || "Plot " + (currentImageIndex + 1);
+    }
+    
+    // Keyboard navigation
+    document.addEventListener("keydown", function(e) {
+        if (modal.style.display === "block") {
+            if (e.key === "Escape") {
+                closeModal();
+            } else if (e.key === "ArrowLeft") {
+                navigateImage(-1);
+            } else if (e.key === "ArrowRight") {
+                navigateImage(1);
+            }
+        }
+    });
+    
+    // Close modal when clicking outside the image
+    modal.onclick = function(e) {
+        if (e.target === modal) {
+            closeModal();
+        }
+    };
     </script>
 </body>
 </html>
